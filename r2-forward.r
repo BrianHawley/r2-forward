@@ -116,15 +116,21 @@ REBOL [
 ; term some proposed features/changes will be added if they seem likely to be
 ; accepted (the acceptance process can be a little slow sometimes).
 ; 
-; Intentionally not supported:
+; Intentionally not supported (in some cases impossible in R2):
+; - Unicode codepoints over 255 in string! and char!.
+; - Conversion from UTF-8 binary! to string! of Unicode codepoints over 127.
+; - Conversion from string! to UTF-8 binary! of Unicode codepoints over 127.
 ; - Functions related to the new port model.
 ; - Functions related to the new graphics model.
 ; - Functions related to other new types I can't spoof (task!, utype!, ...).
 ; - Functions or types for guru or internal use (evoke, stack, native, ...).
 ; - Functions that call chat or the new docs.
+; - Changes or fixes to datatypes already in R2 (string!, port!, error!, ...).
 ; - Changed or fixed R2 natives (there will be another file for those).
+; - Compatibility patches to R2 GUI or port code (there will be other files
+;   for those, maybe, as possible or needed).
 ; - Pre-2.6.2 changes (there will be another file for those).
-; - Syntax changes.
+; - Syntax changes (percent!, get-word meaning get/any, ...).
 ; 
 ; Unless otherwise marked, all functions are based on the behavior of their
 ; R3 counterparts (written by Carl if native, by BrianH if not), and are
@@ -185,6 +191,7 @@ REBOL [
 ; 28-Feb-2009: Tweaks.
 ; - R3's WORDS-OF binds to an object, so changed WORDS-OF to match.
 ; - Tweaked APPLY and RESOLVE for new WORDS-OF behavior.
+; 10-Mar-2009: Removed catch from APPLY function spec to aid debugging.
 
 
 ; Function creation functions
@@ -492,7 +499,7 @@ default: funco [ ; Needs consensus
 
 apply: funco [
 	"Apply a function to a reduced block of arguments."
-	[throw catch]
+	[throw]
 	func [any-function!] "Function to apply"
 	block [block!] "Block of args, reduced first (unless /only)"
 	/only "Use arg values as-is, do not reduce the block"
