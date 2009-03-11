@@ -192,6 +192,7 @@ REBOL [
 ; - R3's WORDS-OF binds to an object, so changed WORDS-OF to match.
 ; - Tweaked APPLY and RESOLVE for new WORDS-OF behavior.
 ; 10-Mar-2009: Removed catch from APPLY function spec to aid debugging.
+; 11-Mar-2009: EXTRACT tweaked to work around a bug in PARSE.
 
 
 ; Function creation functions
@@ -854,8 +855,8 @@ extract: func [
 	unless index [pos: 1]
 	either block? pos [
 		if empty? pos [return any [output make series 0]] ; Shortcut return
-		parse pos [some [number! | logic! | pos: skip (
-			cause-error 'script 'expect-set reduce [[number! logic!] type? first pos]
+		parse pos [some [number! | logic! | set pos skip (
+			cause-error 'script 'expect-set reduce [[number! logic!] type? get/any 'pos]
 		)]]
 		unless into [output: make series len * length? pos]
 		if all [not default any-string? output] [value: copy ""]
