@@ -1,30 +1,12 @@
 REBOL [
 	Title:  "REBOL 3 Forward Compatibility Functions"
-	File: %r2-forward.r
+	Name: 'r2-forward
 	Type: 'module
-	Purpose: "Make REBOL 2 more compatible with REBOL 3."
+	Version: 2.100.37.1
+	Date: 28-Apr-2009
+	File: %r2-forward.r
 	Author: "Brian Hawley" ; BrianH
-	License: {
-		Copyright (c) 2008-2009 Brian Hawley
-		
-		Permission is hereby granted, free of charge, to any person obtaining a copy
-		of this software and associated documentation files (the "Software"), to deal
-		in the Software without restriction, including without limitation the rights
-		to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-		copies of the Software, and to permit persons to whom the Software is
-		furnished to do so, subject to the following conditions:
-		
-		The above copyright notice and this permission notice shall be included in
-		all copies or substantial portions of the Software.
-		
-		THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-		IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-		FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-		AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-		LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-		OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-		THE SOFTWARE.
-	} ; MIT
+	Purpose: "Make REBOL 2 more compatible with REBOL 3."
 	Exports: [
 		; Function creators
 		funco
@@ -37,6 +19,7 @@ REBOL [
 		;closure
 		; Error management
 		cause-error
+		throw-error ; R2 only, not needed in R3
 		; Datatype spoofing
 		map! map? to-map
 		get-path! get-path? to-get-path
@@ -105,6 +88,27 @@ REBOL [
 		dt delta-time
 		;dp delta-profile
 	] ; No Globals to limit any potential damage.
+	License: {
+		Copyright (c) 2008-2009 Brian Hawley
+		
+		Permission is hereby granted, free of charge, to any person obtaining a copy
+		of this software and associated documentation files (the "Software"), to deal
+		in the Software without restriction, including without limitation the rights
+		to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+		copies of the Software, and to permit persons to whom the Software is
+		furnished to do so, subject to the following conditions:
+		
+		The above copyright notice and this permission notice shall be included in
+		all copies or substantial portions of the Software.
+		
+		THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+		IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+		FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+		AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+		LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+		OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+		THE SOFTWARE.
+	} ; MIT
 ]
 
 ; Note: The functions in this file are backports from R3, and will stay as
@@ -114,7 +118,8 @@ REBOL [
 ; R3's current behavior will be tracked as best as it is feasible, and any
 ; missing functions or changed behavior will be added eventually. In the short
 ; term some proposed features/changes will be added if they seem likely to be
-; accepted (the acceptance process can be a little slow sometimes).
+; accepted (the acceptance process can be a little slow sometimes). The version
+; number reflects the corresponding R3 alpha version number, plus revisions.
 ; 
 ; Intentionally not supported (in some cases impossible in R2):
 ; - Unicode codepoints over 255 in string! and char!.
@@ -193,6 +198,11 @@ REBOL [
 ; - Tweaked APPLY and RESOLVE for new WORDS-OF behavior.
 ; 10-Mar-2009: Removed catch from APPLY function spec to aid debugging.
 ; 11-Mar-2009: EXTRACT tweaked to work around a bug in PARSE.
+; 28-Apr-2009: 2.100.37.1 (tracking R3 2.100.37, revision 1)
+; - Rearranged the header to better reflect R3 module headers, with a version.
+; - Removed limit in APPLY on number of function parameter workarounds.
+; - Tweaked many functions after a conversation with Ladislav about error!.
+; - Added THROW-ERROR for use in R2 functions with the [catch] attribute.
 
 
 ; Function creation functions
@@ -303,6 +313,27 @@ has: funco [
 ; Error management
 
 cause-error: funco [
+	"Causes an immediate error with the provided information."
+	err-type [word!]
+	err-id [word!]
+	args
+	/local err
+][
+	err: insert insert make block! 5 err-type err-id
+	case [
+		block? :args [
+			insert/part err args 3
+			remove-each x err [any-function? get/any 'x]
+		]
+		any-function? :args []
+		:args [insert/only err :args]
+	]
+	make error! head err
+]
+; Note: Some of the errors have changed names between R2 and R3.
+; All new code based on an initial R3 version from Carl.
+
+throw-error: funco [
 	"Causes an immediate error throw with the provided information."
 	err-type [word!]
 	err-id [word!]
@@ -320,8 +351,8 @@ cause-error: funco [
 	]
 	throw make error! head err
 ]
-; Note: Some of the errors have changed names between R2 and R3.
-; All new code based on an initial R3 version from Carl.
+; Note: Version of CAUSE-ERROR for R2 functions with the [catch] attribute.
+;   There is no reason for R3 to have this function - R3 has stack traces.
 
 
 ; Datatype spoofing (be careful)
@@ -394,12 +425,12 @@ to-typeset: funct [
 						value: change/part value to-typeset first value 1
 					) :value |
 					value: skip (
-						cause-error 'script 'invalid-arg reduce [first value]
+						throw-error 'script 'invalid-arg reduce [first value]
 					)
 				]]
 				head value
 			]
-		] [cause-error 'script 'invalid-arg reduce [:value]] ; 'bad-make-arg in R3
+		] [throw-error 'script 'invalid-arg reduce [:value]] ; 'bad-make-arg in R3
 	]
 ] ; MAKE or TO typeset! anything-else doesn't work - use TO-TYPESET.
 ; These blocks of datatypes can be used with FIND like R3 typesets.
@@ -438,30 +469,32 @@ scalar?: funco [
 
 ++: funco [
 	"Increment an integer or series index. Return its prior value."
+	[catch]
 	'word [word! paren!] "Integer or series variable."
 ][
 	if all [paren? word not word? set/any 'word do word] [
-		cause-error 'script 'expect-arg reduce ['++ 'word type? get/any 'word]
+		throw-error 'script 'expect-arg reduce ['++ 'word type? get/any 'word]
 	] ; Workaround for R3 change in lit-word! parameters with paren! arguments
 	case [
 		number? get/any word [also get word set word add get word 1]
 		series? get/any word [also get word set word next get word]
-		'else [cause-error 'script 'expect-arg reduce ['++ 'word type? get/any 'word]]
+		'else [throw-error 'script 'expect-arg reduce ['++ 'word type? get/any 'word]]
 	]
 ]
 ; Note: Native in R3.
 
 --: funco [
 	"Decrement an integer or series index. Return its prior value."
+	[catch]
 	'word [word! paren!] "Integer or series variable."
 ][
 	if all [paren? word not word? set/any 'word do word] [
-		cause-error 'script 'expect-arg reduce ['-- 'word type? get/any 'word]
+		throw-error 'script 'expect-arg reduce ['-- 'word type? get/any 'word]
 	] ; Workaround for R3 change in lit-word! parameters with paren! arguments
 	case [
 		number? get/any word [also get word set word subtract get word 1]
 		series? get/any word [also get word set word back get word]
-		'else [cause-error 'script 'expect-arg reduce ['-- 'word type? get/any 'word]]
+		'else [throw-error 'script 'expect-arg reduce ['-- 'word type? get/any 'word]]
 	]
 ]
 ; Note: Native in R3.
@@ -471,7 +504,7 @@ also: funco [
 	value1 [any-type!]
 	value2 [any-type!]
 ][
-	get/any 'value1
+	return get/any 'value1
 ]
 ; Note: Native in R3.
 
@@ -479,7 +512,7 @@ quote: funco [
 	"Returns the value passed to it without evaluation."
 	:value [any-type!]
 ][ ; Broken for word! arguments - use lit-word! instead.
-	get/any 'value
+	return get/any 'value
 ]
 ; Based on a proposal by Peta.
 
@@ -509,7 +542,7 @@ apply: funco [
 ][
 	unless only [block: reduce block]
 	words: words-of :func
-	vars: [ ; Used to special-case 'a and :a parameters (this should be enough)
+	vars: [ ; Used to special-case 'a and :a parameters (the quick way)
 		v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20
 	]
 	path: to-path [func]  ; Even a one-element path works.
@@ -520,17 +553,16 @@ apply: funco [
 		switch type?/word first words [
 			word! [ ; Regular param, all values need evaluation blocked.
 				unless noref [
-					insert/only insert tail todo 'first reduce [get/any 'value]
+					insert/only insert tail todo 'quote get/any 'value
 				] ; Could use QUOTE here, waiting on approval.
 			]
 			lit-word! [ ; Lit-word param, need to special-case get-words.
 				unless noref [
 					either get-word? get/any 'value [
 						; Needs to be a get-word! assigned to a get-word! to get in
-						unless var: pick vars 1 [ ; Only a limited number in R2
-							cause-error 'script 'past-end none
-						] ; Needs a better error
-						vars: next vars
+						either var: pick vars 1 [vars: next vars] [
+							var: use [a] copy ['a]  ; else do it the slow way
+						]
 						set var value
 						insert tail todo to-get-word var
 					] [
@@ -542,10 +574,9 @@ apply: funco [
 				unless noref [
 					either word? get/any 'value [
 						; Needs to be a word! assigned to a word! to get in
-						unless var: pick vars 1 [ ; Only a limited number in R2
-							cause-error 'script 'past-end none
-						] ; Needs a better error
-						vars: next vars
+						either var: pick vars 1 [vars: next vars] [
+							var: use [a] copy ['a]  ; else do it the slow way
+						]
 						set var value
 						insert tail todo var
 					] [
@@ -562,7 +593,7 @@ apply: funco [
 		words: next words
 		block: next block
 	]
-	also do todo ( ; DO the built code, then cleanup memory references
+	return also do todo ( ; DO the built code, then cleanup memory references
 		set [func words block path todo value vars var] set head vars none
 	)
 ]
@@ -710,12 +741,12 @@ take: funco [
 	length [number! series! port! pair!]
 	/last "Take it from the tail end"
 ][
-	if value [throw-on-error [
+	if value [
 		either part [
 			case [
 				pair? length [
 					unless image? value [
-						cause-error 'script 'invalid-part length
+						throw-error 'script 'invalid-part length
 					]
 					last: none
 				]
@@ -723,7 +754,7 @@ take: funco [
 					either same? head value head length [
 						length: subtract index? length index? value
 					][
-						cause-error 'script 'invalid-part reduce [length]
+						throw-error 'script 'invalid-part reduce [length]
 					]
 				]
 			]
@@ -737,7 +768,7 @@ take: funco [
 				value: back tail value
 			] [value] 1 remove value
 		]
-	]]
+	]
 ]
 ; Note: Native (action!) in R3.
 
@@ -768,6 +799,7 @@ move: funco [
 
 array: func [
 	"Makes and initializes a series of a given size."
+	[catch]
 	size [integer! block!] "Size or block of sizes for each dimension"
 	/initial "Specify an initial value for all elements"
 	value "Initial value (will be called each time if a function)"
@@ -776,7 +808,7 @@ array: func [
 	if block? size [
 		if tail? rest: next size [rest: none]
 		unless integer? set/any 'size pick size 1 [
-			cause-error 'script 'expect-arg reduce ['array 'size type? get/any 'size]
+			throw-error 'script 'expect-arg reduce ['array 'size type? get/any 'size]
 		]
 	]
 	block: make block! size
@@ -816,7 +848,7 @@ replace: func [
 			length? :search
 		]
 		any-block? :search [length? :search]
-		true  1		
+		true  1
 	]
 	; /all and /case checked before the while, /tail after
 	do-break: unless all [:break] ; Will be none if not /all, a noop
@@ -856,7 +888,7 @@ extract: func [
 	either block? pos [
 		if empty? pos [return any [output make series 0]] ; Shortcut return
 		parse pos [some [number! | logic! | set pos skip (
-			cause-error 'script 'expect-set reduce [[number! logic!] type? get/any 'pos]
+			throw-error 'script 'expect-set reduce [[number! logic!] type? get/any 'pos]
 		)]]
 		unless into [output: make series len * length? pos]
 		if all [not default any-string? output] [value: copy ""]
@@ -891,7 +923,7 @@ map: funco [
 	] [return output] ; Will be none if not specified
 	; BIND/copy word and body
 	word: either block? word [
-		if empty? word [cause-error 'script 'invalid-arg [[]]]
+		if empty? word [throw make error! [script invalid-arg []]]
 		copy/deep word  ; /deep because word is rebound before errors checked
 	] [reduce [word]]
 	word: use word reduce [word]
@@ -903,7 +935,7 @@ map: funco [
 		insert insert insert tail init first x [at data] index? x
 		remove x
 	) :x | x: skip (
-		cause-error 'script 'expect-set reduce [[word! set-word!] type? first x]
+		throw-error 'script 'expect-set reduce [[word! set-word!] type? first x]
 	)]]
 	insert tail init [set word data]
 	len: length? word ; Can be zero now (for advanced code tricks)
@@ -1159,6 +1191,7 @@ undirize: funco [
 
 list-dir: funco [
 	"Print contents of a directory (ls)."
+	[catch]
 	'path [file! word! path! string! unset! paren!] "Accepts %file, :variables, and just words (as dirs)"
 	/l "Line of info format"
 	/f "Files only"
@@ -1176,7 +1209,7 @@ list-dir: funco [
 		file! [change-dir path]
 		string! [change-dir to-rebol-file path]
 		word! path! [change-dir to-file path]
-	] [cause-error 'script 'expect-arg reduce ['list-dir 'path type? get/any 'path]]
+	] [throw-error 'script 'expect-arg reduce ['list-dir 'path type? get/any 'path]]
 	if r [l: true]
 	unless l [l: make string! 62] ; approx width
 	unless indent [indent: ""]
@@ -1233,7 +1266,7 @@ cd: func [
 		file! [change-dir path]
 		string! [change-dir to-rebol-file path]
 		word! path! [change-dir to-file path]
-	] [cause-error 'script 'expect-arg reduce ['cd 'path type? get/any 'path]]
+	] [throw-error 'script 'expect-arg reduce ['cd 'path type? get/any 'path]]
 ]
 
 more: func [
@@ -1247,7 +1280,7 @@ more: func [
 		file! [file]
 		string! [to-rebol-file file]
 		word! path! [to-file file]
-	] [cause-error 'script 'expect-arg reduce ['more 'file type? get/any 'file]]
+	] [throw-error 'script 'expect-arg reduce ['more 'file type? get/any 'file]]
 ]
 
 in-dir: funco [
@@ -1291,7 +1324,7 @@ reflect: funco [
 	[catch]
 	value [any-type!]
 	field [word!] "Such as: spec body words values title etc."
-][ ; In R3 the *-OF functions redirect to REFLECT - vice-versa in R2.
+][throw-on-error [ ; In R3 the *-OF functions redirect to REFLECT - vice-versa in R2.
 	switch/default field [
 		spec [spec-of :value]
 		body [body-of :value]
@@ -1302,7 +1335,7 @@ reflect: funco [
 	] [
 		cause-error 'script 'invalid-arg field
 	]
-]
+]]
 ; Note: Native (action!) in R3, and the *-OF functions below are wrappers.
 
 spec-of: funco [
