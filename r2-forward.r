@@ -137,6 +137,15 @@ REBOL [
 ; - Pre-2.6.2 changes (there will be another file for those).
 ; - Syntax changes (percent!, get-word meaning get/any, ...).
 ; 
+; R3-compatibility notes about lit-word! and get-word! parameters:
+; - In R2, lit-word! parameters evaluate get-word! arguments. In R3, param!
+;   arguments are also evaluated. This can be emulated in R2: see CD below.
+; - In R2, get-word! parameters retrieve the value from word! arguments. In R3
+;   they don't evaluate or retrieve anything. There is no way to do this in R2,
+;   which is why QUOTE is impossible in R2 for word! arguments (use lit-words).
+; Also, op!s in R2 operate in prefix mode when assigned to another word, while
+; they still operate in infix mode in R3 - we take advantage of that here.
+; 
 ; Unless otherwise marked, all functions are based on the behavior of their
 ; R3 counterparts (written by Carl if native, by BrianH if not), and are
 ; all new code written by BrianH. Some were suggested or proposed by others,
@@ -203,6 +212,7 @@ REBOL [
 ; - Removed limit in APPLY on number of function parameter workarounds.
 ; - Tweaked many functions after a conversation with Ladislav about error!.
 ; - Added THROW-ERROR for use in R2 functions with the [catch] attribute.
+; 4-May-2009: Fixed bugs in APPLY and MAP, lowered MAP memory overhead.
 
 
 ; Function creation functions
@@ -593,7 +603,7 @@ apply: funco [
 		words: next words
 		block: next block
 	]
-	return also do todo ( ; DO the built code, then cleanup memory references
+	also do todo ( ; DO the built code, then cleanup memory references
 		set [func words block path todo value vars var] set head vars none
 	)
 ]
@@ -609,14 +619,8 @@ apply: funco [
 ;   function, any lit-word! or get-word! parameters can be used to inject
 ;   code into your function, which can be a security hole. APPLY can make
 ;   functional-style REBOL code safer to write.
-; R3-compatibility notes about lit-word! and get-word! parameters:
-; - In R2, lit-word! parameters evaluate get-word! arguments. In R3, param!
-;   arguments are also evaluated. This can be emulated in R2: see CD below.
-; - In R2, get-word! parameters retrieve the value from word! arguments. In R3
-;   they don't evaluate or retrieve anything. There is no way to do this in R2,
-;   which is why QUOTE is impossible in R2 for word! arguments (use lit-words).
-; Also, op!s in R2 operate in prefix mode when assigned to another word, while
-; they still operate in infix mode in R3 - we take advantage of that here.
+; Gotcha: Returning an error from the applied function triggers the error. It
+; is not yet known how to fix this in R2 without modifying APPLY at runtime.
 
 eval: funco [
 	"Evaluates a block, file, URL, function, word, or any other value."
@@ -911,16 +915,14 @@ map: funco [
 	"Evaluates a block for each value(s) in a series and returns them as a block."
 	[throw catch]
 	'word [word! block!] "Word or block of words to set each time (local)"
-	data [any-block! any-string! none!] "The series to traverse" ; Not image!
+	data [block!] "The series to traverse"
 	body [block!] "Block to evaluate each time"
 	/into "Collect into a given series, rather than a new block"
 	output [any-block! any-string!] "The series to output to" ; Not image!
 	/local init len x
 ][
 	; Shortcut return for empty data
-	either data [
-		if empty? data [return any [output make data 0]]
-	] [return output] ; Will be none if not specified
+	if empty? data [return any [output make block! 0]]
 	; BIND/copy word and body
 	word: either block? word [
 		if empty? word [throw make error! [script invalid-arg []]]
@@ -929,21 +931,21 @@ map: funco [
 	word: use word reduce [word]
 	body: bind/copy body first word
 	; Build init code
-	init: make block! 4 * length? word
+	init: none
 	parse word [any [word! | x: set-word! (
+		unless init [init: make block! 4]
 		; Add [x: at data index] to init, and remove from word
 		insert insert insert tail init first x [at data] index? x
 		remove x
 	) :x | x: skip (
-		throw-error 'script 'expect-set reduce [[word! set-word!] type? first x]
+		throw make error! reduce ['script 'expect-set [word! set-word!] type? first x]
 	)]]
-	insert tail init [set word data]
 	len: length? word ; Can be zero now (for advanced code tricks)
 	; Create the output series if not specified
 	unless into [output: make block! divide length? data max 1 len]
 	; Process the data (which is not empty at this point)
 	until [ ; Note: output: insert/only output needed for list! output
-		do init
+		set word data  do init
 		unless unset? set/any 'x do body [output: insert/only output :x]
 		tail? data: skip data len
 	]
