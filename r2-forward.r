@@ -2,8 +2,8 @@ REBOL [
 	Title:  "REBOL 3 Forward Compatibility Functions"
 	Name: 'r2-forward
 	Type: 'module
-	Version: 2.100.37.1
-	Date: 28-Apr-2009
+	Version: 2.100.56.0
+	Date: 17-Jun-2009
 	File: %r2-forward.r
 	Author: "Brian Hawley" ; BrianH
 	Purpose: "Make REBOL 2 more compatible with REBOL 3."
@@ -13,19 +13,22 @@ REBOL [
 		func
 		function
 		funct
-		functor
 		does
 		has
 		;closure
 		; Error management
 		cause-error
 		throw-error ; R2 only, not needed in R3
+		attempt
+		assert
 		; Datatype spoofing
 		map! map? to-map
 		get-path! get-path? to-get-path
 		;closure! closure? to-closure
+		;module! module? to-module module import
 		typeset! typeset? to-typeset
 		any-path! any-path?
+		any-object! any-object?
 		scalar! scalar?
 		; Control functions
 		!
@@ -42,6 +45,7 @@ REBOL [
 		object
 		extend
 		resolve
+		;unbind
 		; Series functions
 		ajoin
 		first+
@@ -55,6 +59,7 @@ REBOL [
 		alter
 		map
 		collect
+		;collect-words
 		; Character/string encoding functions
 		ascii?
 		latin1?
@@ -87,6 +92,7 @@ REBOL [
 		; Profiling functions
 		dt delta-time
 		;dp delta-profile
+		speed?
 	] ; No Globals to limit any potential damage.
 	License: {
 		Copyright (c) 2008-2009 Brian Hawley
@@ -127,6 +133,7 @@ REBOL [
 ; - Conversion from string! to UTF-8 binary! of Unicode codepoints over 127.
 ; - Functions related to the new port model.
 ; - Functions related to the new graphics model.
+; - Functions related to codecs (decode, encode, encoding?, ...).
 ; - Functions related to other new types I can't spoof (task!, utype!, ...).
 ; - Functions or types for guru or internal use (evoke, stack, native, ...).
 ; - Functions that call chat or the new docs.
@@ -136,6 +143,8 @@ REBOL [
 ;   for those, maybe, as possible or needed).
 ; - Pre-2.6.2 changes (there will be another file for those).
 ; - Syntax changes (percent!, get-word meaning get/any, ...).
+; - Changes to the system object or command line parameters.
+; - Deliberately removed features (ordinal reflection, ...).
 ; 
 ; R3-compatibility notes about lit-word! and get-word! parameters:
 ; - In R2, lit-word! parameters evaluate get-word! arguments. In R3, param!
@@ -213,7 +222,14 @@ REBOL [
 ; - Tweaked many functions after a conversation with Ladislav about error!.
 ; - Added THROW-ERROR for use in R2 functions with the [catch] attribute.
 ; 4-May-2009: Fixed bugs in APPLY and MAP, lowered MAP memory overhead.
-
+; 5-May-2009: Implemented RESOLVE/only.
+; 9-Jun-2009: Fixed ATTEMPT.
+; 10-Jun-2009: Made CAUSE-ERROR and THROW-ERROR more compatible with 2.100.53.
+; 16-Jun-2009: Added FUNCT/with, removed FUNCTOR, loose backport of ASSERT.
+; 17-Jun-2009: Catching up with R3 alpha 56.
+; - Added SPEED? and ANY-OBJECT!, fixed SCALAR!, tweaked APPLY and MOVE.
+; - Added modules, UNBIND and COLLECT-WORDS to to-do list.
+; - Added codecs, system object and command line changes to not-to-do list.
 
 ; Function creation functions
 
@@ -248,10 +264,12 @@ function: funco [
 ; Carl wrote the R3 version, partly copied here.
 
 funct: funco [
-	"Defines a user function assuming all set-words are locals."
+	"Defines a function with all set-words as locals."
 	[catch]
 	spec [block!] "Help string (opt) followed by arg words (and opt type and string)"
 	body [block!] "The body block of the function"
+	/with "Define or use a persistent object (self)"
+	object [object! block!] "The object or spec"
 	/local r ws wb a
 ][
 	spec: copy/deep spec
@@ -261,6 +279,12 @@ funct: funco [
 	parse spec [any [
 		set-word! | set a any-word! (insert tail ws to-word a) | skip
 	]]
+	; Build the object if need be and screen out its words too
+	if with [
+		unless object? object [object: make object! object]
+		bind body object  ; Bind any object words found in the body
+		insert tail ws first object ; first used since 'self should be included
+	]
 	; Get any set-words in the code block as words (wb)
 	wb: copy ws  ; Start with ws so we can remove ws with difference
 	parse body r: [any [
@@ -279,26 +303,6 @@ funct: funco [
 ]
 ; Note: The set-word! collection and spec word screening is native in R3.
 ; All new code based on an initial R3 version from Carl.
-
-functor: funco [
-	"Defines a user function with all set-words collected into a persistent object (self)."
-	[catch]
-	spec [block!] "Help string (opt) followed by arg words (and opt type and string)"
-	body [block!] "The body block of the function"
-	/local r wb a
-][
-	wb: copy []  ; Get any set-words in the code block (wb)
-	parse body r: [any [
-		set a set-word! (unless find wb a [insert tail wb a]) |
-		hash! | into r | skip
-	]]
-	remove find wb [self:]  ; Remove self: for object construction safety
-	throw-on-error [make function! copy/deep spec  bind/copy body construct wb]
-]
-; Note: The set-word! collection is native in R3, the whole function one line.
-; Function parameter words override the bindings of persistent object words,
-; but the words still exist in the object and can be accessed through self.
-; R3 version based on a suggestion from Carl, written by BrianH.
 
 does: funco [
 	"A shortcut to define a function that has no arguments or locals."
@@ -327,18 +331,12 @@ cause-error: funco [
 	err-type [word!]
 	err-id [word!]
 	args
-	/local err
 ][
-	err: insert insert make block! 5 err-type err-id
-	case [
-		block? :args [
-			insert/part err args 3
-			remove-each x err [any-function? get/any 'x]
-		]
-		any-function? :args []
-		:args [insert/only err :args]
+	parse args: compose [(:args)] [
+		0 3 [args: any-function! (change/only args spec-of first args) | skip]
 	]
-	make error! head err
+	args: head args
+	make error! reduce [err-type err-id pick args 1 pick args 2 pick args 3]
 ]
 ; Note: Some of the errors have changed names between R2 and R3.
 ; All new code based on an initial R3 version from Carl.
@@ -348,21 +346,53 @@ throw-error: funco [
 	err-type [word!]
 	err-id [word!]
 	args
-	/local err
 ][
-	err: insert insert make block! 5 err-type err-id
-	case [
-		block? :args [
-			insert/part err args 3
-			remove-each x err [any-function? get/any 'x]
-		]
-		any-function? :args []
-		:args [insert/only err :args]
+	parse args: compose [(:args)] [
+		0 3 [args: any-function! (change/only args spec-of first args) | skip]
 	]
-	throw make error! head err
+	args: head args
+	throw make error! reduce [err-type err-id pick args 1 pick args 2 pick args 3]
 ]
 ; Note: Version of CAUSE-ERROR for R2 functions with the [catch] attribute.
 ;   There is no reason for R3 to have this function - R3 has stack traces.
+
+attempt: funco [
+	"Tries to evaluate and returns result or NONE on error."
+	[throw]
+	value ;[block!]  ; Unnecessary overhead - TRY tests for this type
+][
+	unless error? set/any 'value try :value [get/any 'value]
+]
+
+assert: funco [
+	"Assert that condition is true, else throw an assertion error."
+	[catch throw]
+	conditions [block!]
+	/type "Safely check datatypes of variables (words)" ; not paths
+	/local w t
+][throw-on-error [
+	either type [
+		parse conditions [any [
+			[set w word! | set w skip (
+				cause-error 'script 'invalid-arg type? get/any 'w
+			)]
+			[set t [block! | word!] (
+				unless find to-typeset t type? get/any w [
+					make error! join "datatype assertion failed for: " w
+				]
+			) | set t skip (
+				cause-error 'script 'invalid-arg type? get/any 't
+			)]
+		]]
+	][
+		any [
+			all conditions
+			make error! join "assertion failed for: " mold conditions
+		]
+	]
+]]
+; This is a relatively slow, loose approximation of a native in R3.
+; ASSERT/type of paths doesn't work yet, since GET doesn't either.
 
 
 ; Datatype spoofing (be careful)
@@ -460,9 +490,18 @@ any-path?: funco [
 	found? find any-path! type? get/any 'value
 ]
 
+; Fake any-object! typeset
+any-object!: reduce [object! error! port!] ; module! task!
+any-object?: funco [
+	"Return TRUE if value is any type of object."
+	value [any-type!]
+][
+	found? find any-object! type? get/any 'value
+]
+
 ; Fake scalar! typeset
 scalar!: reduce
-	[integer! decimal! money! char! pair! tuple! date! time! logic! none!]
+	[integer! decimal! money! char! pair! tuple! time!]
 scalar?: funco [
 	"Return TRUE if value is any type of scalar."
 	value [any-type!]
@@ -544,7 +583,7 @@ default: funco [ ; Needs consensus
 apply: funco [
 	"Apply a function to a reduced block of arguments."
 	[throw]
-	func [any-function!] "Function to apply"
+	func [any-function!] "Function value to apply"
 	block [block!] "Block of args, reduced first (unless /only)"
 	/only "Use arg values as-is, do not reduce the block"
 	/local words path todo noref value vars var
@@ -658,9 +697,16 @@ resolve: funco [
 	"Set known values in target from those given by the source."
 	target [object! port!]
 	source [object! port!]
+	/only from [block!] "Only set words listed here (exports)"
 ][
-	set/any bind words-of source target get/any source
-	also target set [source target] none
+	either only [
+		foreach word intersect words-of source intersect words-of target from [
+			error? set/any in target word get/any word
+		]
+	] [
+		error? set/any bind words-of source target get/any source
+	]
+	also target set [source target from] none
 ]
 ; Note: This is native in R3 and supports module! too.
 
@@ -778,6 +824,7 @@ take: funco [
 
 move: funco [
 	"Move a value or span of values in a series."
+	[catch]
 	source [series!] "Source series"
 	offset [integer!] "Offset to move by, or index to move to"
 	/part "Move part of a series"
@@ -788,7 +835,8 @@ move: funco [
 ][
 	unless length [length: 1]
 	if skip [
-		offset: offset * size: max 1 size
+		if 1 > size [throw-error 'script 'out-of-range size]
+		offset: offset * size
 		length: length * size
 	]
 	part: copy/part source length
@@ -1454,7 +1502,7 @@ title-of: funco [
 
 ; Profiling functions
 
-dt: delta-time: func [
+dt: delta-time: funco [
 	"Delta-time - return the time it takes to evaluate a block."
 	block [block!]
 	/local start
@@ -1465,12 +1513,42 @@ dt: delta-time: func [
 ]
 ; Carl wrote the R3 version, copied here.
 
+speed?: funco [
+    "Ballpark speed benchmark."
+    /local n
+][
+    recycle
+    n: dt [loop 1000000 [tail? next "x"]]
+    to integer! 1.44 / n/second * 600
+]
+; Carl wrote the R3 version, copied here.
+
 
 ; Future additions, maybe - haven't been accepted in R3 yet.
 
 #do [comment [ ; So this section is not loaded by prerebol.
 
 ; FORMAT, PRINTF and SPLIT waiting on consensus, no point in backporting them yet.
+
+functor: funco [ ; Moved to /Plus
+	"Defines a user function with all set-words collected into a persistent object (self)."
+	[catch]
+	spec [block!] "Help string (opt) followed by arg words (and opt type and string)"
+	body [block!] "The body block of the function"
+	/local r wb a
+][
+	wb: copy []  ; Get any set-words in the code block (wb)
+	parse body r: [any [
+		set a set-word! (unless find wb a [insert tail wb a]) |
+		hash! | into r | skip
+	]]
+	remove find wb [self:]  ; Remove self: for object construction safety
+	throw-on-error [make function! copy/deep spec  bind/copy body construct wb]
+]
+; Note: The set-word! collection is native in R3, the whole function one line.
+; Function parameter words override the bindings of persistent object words,
+; but the words still exist in the object and can be accessed through self.
+; R3 version based on a suggestion from Carl, written by BrianH.
 
 reword: funco [ ; Needs a lot of work
 	"Create a new string from a template and rewording rules."
