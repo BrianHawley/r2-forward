@@ -2,8 +2,8 @@ REBOL [
 	Title:  "REBOL 3 Forward Compatibility Functions"
 	Name: 'r2-forward
 	Type: 'module
-	Version: 2.100.56.0
-	Date: 17-Jun-2009
+	Version: 2.100.58.0
+	Date: 12-Jan-2010
 	File: %r2-forward.r
 	Author: "Brian Hawley" ; BrianH
 	Purpose: "Make REBOL 2 more compatible with REBOL 3."
@@ -15,7 +15,7 @@ REBOL [
 		funct
 		does
 		has
-		;closure
+		closure
 		; Error management
 		cause-error
 		throw-error ; R2 only, not needed in R3
@@ -24,7 +24,8 @@ REBOL [
 		; Datatype spoofing
 		map! map? to-map
 		get-path! get-path? to-get-path
-		;closure! closure? to-closure
+		to-function
+		closure! closure? to-closure
 		;module! module? to-module module import
 		typeset! typeset? to-typeset
 		any-path! any-path?
@@ -230,6 +231,8 @@ REBOL [
 ; - Added SPEED? and ANY-OBJECT!, fixed SCALAR!, tweaked APPLY and MOVE.
 ; - Added modules, UNBIND and COLLECT-WORDS to to-do list.
 ; - Added codecs, system object and command line changes to not-to-do list.
+; 22-Jun-2009: Added closures, TO-FUNCTION. Improved FUNCT.
+; 12-Jan-2010: Minor fixes to TO-TYPESET, TYPES-OF and UNDIRIZE.
 
 ; Function creation functions
 
@@ -286,15 +289,13 @@ funct: funco [
 		insert tail ws first object ; first used since 'self should be included
 	]
 	; Get any set-words in the code block as words (wb)
-	wb: copy ws  ; Start with ws so we can remove ws with difference
+	wb: make block! 12  ; This should be a reasonable default
 	parse body r: [any [
-		set a set-word! (
-			unless find wb a: to-word a [insert tail wb a]
-		) |
+		set a set-word! (insert tail wb to-word a) |
 		hash! | into r | skip
 	]]
-	; Remove the ws words from wb and add the rest as locals
-	unless empty? wb: difference ws wb [
+	; Remove the ws words from wb and add the rest to the spec as locals
+	unless empty? wb: exclude wb ws [
 		remove find wb 'local
 		unless find spec /local [insert tail spec /local]
 		insert tail spec wb
@@ -322,6 +323,30 @@ has: funco [
 	throw-on-error [make function! head insert copy/deep vars /local copy/deep body]
 ]
 ; Carl wrote the R3 version, partly copied here.
+
+closure: funco [
+	"Defines a closure function."
+	[catch]
+	spec [block!] "Help string (opt) followed by arg words (and opt type and string)"
+	body [block!] "The body block of the function"
+	/local spc bdy word
+] [
+	spc: make block! 1 + (2 * length? spec) ; 2 * in case arguments not typed
+	insert/only spc [throw]
+	bdy: make block! 5 + length? spec
+	insert bdy reduce [:do :make :function! spc body]
+	parse spec [any [
+		set-word! | set word any-word! (
+			insert tail bdy to word! :word
+			insert tail spc to get-word! :word
+			insert/only tail spc [any-type!]
+		) | skip
+	]]
+	throw-on-error [make function! spec bdy]
+]
+; Note: Adapted from code by Ladislav Mecir, used with permission.
+;   This uses the R2-style get-word! parameter word! retrieval.
+;   The :do :make :function! signiature is checked in CLOSURE? below.
 
 
 ; Error management
@@ -408,11 +433,31 @@ get-path!: :path!  ; Doesn't work in function specs, TYPE?
 get-path?: funco ["Returns TRUE if it is this type." value [any-type!]] [
 	found? all [path? get/any 'value get-word? pick value 1]
 ] ; Note: PATH? will also succeed in R2
-to-get-path: funco [value] [
+to-get-path: funco ["Converts to get-path! value." value] [
 	value: to-path :value
 	if word? pick value 1 [poke value 1 to-get-word pick value 1]
 	value ; get-path? fails if first element not get-word!
 ]
+
+; R3 has TO-FUNCTION
+to-function: funco ["Converts to function! value." value [block!]] [
+	make function! pick value 1 pick value 2 
+] ; Should be close enough to the R3 version.
+
+; Fake closure! with function!
+closure!: :function!  ; Doesn't work in function specs, TYPE?
+closure?: funco ["Returns TRUE if it is this type." value [any-type!]] [
+	all [
+		function? get/any 'value
+		value: second :value  ; Not doing BODY-OF here to lower overhead
+		same? pick value 1 :do
+		same? pick value 2 :make
+		same? pick value 3 :function!
+	] ; This should be good enough...
+] ; Note: FUNCTION? will also succeed in R2
+to-closure: funco ["Converts to closure! value." value [block!]] [
+	closure pick value 1 pick value 2 
+] ; Should be close enough to the R3 version.
 
 ; Fake typeset! with block! of datatype!
 typeset!: :block!
@@ -420,40 +465,40 @@ typeset?: funco ["Returns TRUE if it is this type." value [any-type!]] [
 	found? all [block? get/any 'value parse value [any datatype!]]
 ] ; Note: BLOCK? will also succeed in R2
 to-typeset: funct [
-	"Make a (fake) typeset." [catch] value
+	"Converts to typeset! value." [catch] value
 ] [
-	anytype: (reduce [
+	anytype: [
 		none! logic! integer! decimal! money! char! pair! tuple! time! date!
 		string! binary! file! email! url! tag! issue! bitset! image! block!
 		paren! path! set-path! lit-path! datatype! word! set-word! get-word!
 		lit-word! refinement! native! action! routine! op! function! object!
 		error! port! event! struct! library! hash! list! symbol! unset!
-	])
-	anyblock: (reduce [
+	]
+	anyblock: [
 		block! paren! path! set-path! lit-path! hash! list!
-	])
-	anyfunction: (reduce [
+	]
+	anyfunction: [
 		native! action! routine! op! function! ;rebcode!
-	])
-	anystring: (reduce [
+	]
+	anystring: [
 		string! binary! file! email! url! tag! issue!
-	])
-	anyword: (reduce [
+	]
+	anyword: [
 		word! set-word! get-word! lit-word! refinement!
-	])
-	series: (reduce [
+	]
+	series: [
 		string! binary! file! email! url! tag! issue! image!
 		block! paren! path! set-path! lit-path! hash! list!
-	])
-	number: (reduce [integer! decimal!])
-	switch/default :value [
-		any-type! #[datatype! any-type!] [copy anytype]
-		any-block! #[datatype! any-block!] [copy anyblock]
-		any-function! #[datatype! any-function!] [copy anyfunction]
-		any-string! #[datatype! any-string!] [copy anystring]
-		any-word! #[datatype! any-word!] [copy anyword]
-		series! #[datatype! series!] [copy series]
-		number! #[datatype! number!] [copy number]
+	]
+	number: [integer! decimal!]
+	switch/default either datatype? :value [to-word value] [:value] [
+		any-type! [reduce anytype]
+		any-block! [reduce anyblock]
+		any-function! [reduce anyfunction]
+		any-string! [reduce anystring]
+		any-word! [reduce anyword]
+		series! [reduce series]
+		number! [reduce number]
 	] [
 		switch/default type?/word :value [
 			datatype! [reduce [value]]
@@ -476,7 +521,7 @@ to-typeset: funct [
 ; These blocks of datatypes can be used with FIND like R3 typesets.
 ; Note: You need to use FOUND? with FIND typeset in R2 to get the R3 result.
 ; R3 new types not included: percent! vector! get-path! map! typeset! rebcode!
-;   closure! frame! module! task! gob! handle! utype!
+;   command! closure! frame! module! task! gob! handle! utype!
 ; R2 pseudotypes special-cased:
 ;   any-block! any-function! any-string! any-type! any-word! series! number!
 ; R2 obsolete types included: hash! list! symbol!
@@ -1004,27 +1049,7 @@ map: funco [
 ]
 ; Note: This is pretty fast by R2 mezzanine loop standards, native in R3.
 
-#do [comment [ ; So this section is not loaded by prerebol.
-; MAP, minimal fast version
-map: funco [
-	"Evaluates a block for each value(s) in a series and returns them as a block."
-	[throw]
-	'word [word! block!] "Word or block of words to set each time (local)"
-	data [block!] "The series to traverse"
-	body [block!] "Block to evaluate each time"
-] compose/deep [ ; To reduce function creation overhead to just once
-	foreach :word data reduce [
-		first [(func [output val [any-type!]] [
-			if value? 'val [insert/only tail output :val]
-			output
-		])]
-		make block! either word? word [length? data] [divide length? data length? word]
-		:do body
-	]
-]
-]]
-
-collect: funco [ ; Needs consensus
+collect: funco [
 	"Evaluates a block, storing values via KEEP function, and returns block of collected values."
 	body [block!] "Block to evaluate"
 	/into "Insert into a buffer instead (returns position after insert)"
@@ -1234,7 +1259,7 @@ undirize: funco [
 	path [file! string! url!]
 ][
 	path: copy path
-	if #"/" = last path [clear back tail path]
+	if #"/" = pick path length? path [clear back tail path]
 	path
 ]
 ; Suggested by a Kaj's compatibility complaints.
@@ -1437,17 +1462,10 @@ types-of: funct [
 	"Returns a copy of the types of a function."
 	value
 ] compose/only [ ; Returns types as blocks of datatype! values
-	anytype: (to-typeset any-type!)
-	anyblock: (to-typeset any-block!)
-	anyfunction: (to-typeset any-function!)
-	anystring: (to-typeset any-string!)
-	anyword: (to-typeset any-word!)
-	series: (to-typeset series!)
-	number: (to-typeset number!)
 	valtype: (
 		head remove find head remove find to-typeset any-type! error! unset!
 	) ; R2 excludes error! here where R3 doesn't
-	reftype: (reduce [none! logic!])
+	reftype: [none! logic!]
 	case [
 		object? :value [cause-error 'script 'invalid-arg 'types]
 		any-function? :value [
@@ -1459,24 +1477,24 @@ types-of: funct [
 						types: copy types
 						while [not tail? types] [
 							switch/default first types [
-								#[datatype! any-type!] [types: change/part types anytype 1]
-								#[datatype! any-block!] [types: change/part types anyblock 1]
-								#[datatype! any-function!] [types: change/part types anyfunction 1]
-								#[datatype! any-string!] [types: change/part types anystring 1]
-								#[datatype! any-word!] [types: change/part types anyword 1]
-								#[datatype! series!] [types: change/part types series 1]
-								#[datatype! number!] [types: change/part types number 1]
+								any-type! [types: change/part types to-typeset any-type! 1]
+								any-block! [types: change/part types to-typeset any-block! 1]
+								any-function! [types: change/part types to-typeset any-function! 1]
+								any-string! [types: change/part types to-typeset any-string! 1]
+								any-word! [types: change/part types to-typeset any-word! 1]
+								series! [types: change/part types to-typeset series! 1]
+								number! [types: change/part types to-typeset number! 1]
 							] [
 								types: next types
 							]
 						]
 						insert/only tail result head types
 					) | (
-						insert/only tail result copy valtype
+						insert/only tail result reduce valtype
 					)
 				] |
 				refinement! (
-					insert/only tail result copy reftype
+					insert/only tail result reduce reftype
 				) |
 				skip ; I have no idea how set-words in the spec are to be treated
 			]]]
@@ -1529,6 +1547,24 @@ speed?: funco [
 #do [comment [ ; So this section is not loaded by prerebol.
 
 ; FORMAT, PRINTF and SPLIT waiting on consensus, no point in backporting them yet.
+
+; MAP, minimal fast version
+map: funco [
+	"Evaluates a block for each value(s) in a series and returns them as a block."
+	[throw]
+	'word [word! block!] "Word or block of words to set each time (local)"
+	data [block!] "The series to traverse"
+	body [block!] "Block to evaluate each time"
+] compose/deep [ ; To reduce function creation overhead to just once
+	foreach :word data reduce [
+		first [(func [output val [any-type!]] [
+			if value? 'val [insert/only tail output :val]
+			output
+		])]
+		make block! either word? word [length? data] [divide length? data length? word]
+		:do body
+	]
+]
 
 functor: funco [ ; Moved to /Plus
 	"Defines a user function with all set-words collected into a persistent object (self)."
