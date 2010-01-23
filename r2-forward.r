@@ -2,8 +2,8 @@ REBOL [
 	Title:  "REBOL 3 Forward Compatibility Functions"
 	Name: 'r2-forward
 	Type: 'module
-	Version: 2.100.58.0
-	Date: 12-Jan-2010
+	Version: 2.100.80.0
+	Date: 22-Jan-2010
 	File: %r2-forward.r
 	Author: "Brian Hawley" ; BrianH
 	Purpose: "Make REBOL 2 more compatible with REBOL 3."
@@ -31,6 +31,8 @@ REBOL [
 		any-path! any-path?
 		any-object! any-object?
 		scalar! scalar?
+		immediate!
+		internal!
 		; Control functions
 		!
 		++
@@ -50,6 +52,8 @@ REBOL [
 		; Series functions
 		ajoin
 		first+
+		single?
+		remold
 		append
 		swap
 		take
@@ -58,13 +62,14 @@ REBOL [
 		extract
 		replace
 		alter
-		map
+		map-each
 		collect
-		;collect-words
+		collect-words
 		; Character/string encoding functions
 		ascii?
 		latin1?
 		utf?
+		invalid-utf?
 		deline
 		enline
 		; File functions
@@ -233,6 +238,13 @@ REBOL [
 ; - Added codecs, system object and command line changes to not-to-do list.
 ; 22-Jun-2009: Added closures, TO-FUNCTION. Improved FUNCT.
 ; 12-Jan-2010: Minor fixes to TO-TYPESET, TYPES-OF and UNDIRIZE.
+; 22-Jan-2010: Updated to 2.100.80 semantics
+; - Added COLLECT-WORDS, REMOLD, SINGLE?, IMMEDIATE!, INTERNAL!, INVALID-UTF?.
+; - Removed buggy binary! support from ASCII? and LATIN1?, as done in 2.100.60.
+; - Removed buggy commented-out Unicode checking charsets.
+; - Rewrote RESOLVE, adding the /all option, as done in 2.100.73.
+; - Renamed MAP to MAP-EACH, as done in 2.100.79.
+; - Note: TAKE doesn't have a /deep option, as in 2.100.80.
 
 ; Function creation functions
 
@@ -519,6 +531,7 @@ to-typeset: funct [
 	]
 ] ; MAKE or TO typeset! anything-else doesn't work - use TO-TYPESET.
 ; These blocks of datatypes can be used with FIND like R3 typesets.
+; The logical operations AND, OR and XOR don't work with fake typesets.
 ; Note: You need to use FOUND? with FIND typeset in R2 to get the R3 result.
 ; R3 new types not included: percent! vector! get-path! map! typeset! rebcode!
 ;   command! closure! frame! module! task! gob! handle! utype!
@@ -553,6 +566,13 @@ scalar?: funco [
 ][
 	found? find scalar! type? get/any 'value
 ]
+
+; Fake immediate! and internal! typesets, for documentation
+immediate!: reduce [
+	none! logic! integer! decimal! money! char! pair! tuple! time! date!
+	datatype! word! set-word! get-word! lit-word! refinement! event!
+] ; percent! typeset!
+internal!: reduce [end! unset! symbol!] ; frame! handle!
 
 ; The module! and vector! types are not done yet in R3, no others practical...
 
@@ -739,21 +759,42 @@ extend: funco [
 ; Carl wrote the R3 code, spec by BrianH, mostly copied here.
 
 resolve: funco [
-	"Set known values in target from those given by the source."
+	"Copy context by setting values in the target from those in the source."
+	[catch]
 	target [object! port!]
 	source [object! port!]
-	/only from [block!] "Only set words listed here (exports)"
+	/only from [block! integer!] "Only specific words (exports) or new words in target (index to tail)"
+	/all "Set all words, even those in the target that already have a value"
 ][
 	either only [
-		foreach word intersect words-of source intersect words-of target from [
-			error? set/any in target word get/any word
+		from: either integer? from [
+			; Only set words in the target positioned at the number from or later
+			unless positive? from [throw-error 'script 'out-of-range from]
+			intersect words-of source at words-of target from
+		] [
+			; Only set the words in the target that are also in the from block
+			intersect words-of source intersect words-of target from
 		]
+		foreach word from pick [
+			[unless value? in target word [error? set/any in target word get/any word]]
+			[error? set/any in target word get/any word]
+		] not all ; See below for what this means
 	] [
-		error? set/any bind words-of source target get/any source
+		either all [ ; Override all target words even if they have values
+			error? set/any bind words-of source target get/any source
+		] [ ; Only set target words if they aren't yet set
+			foreach word intersect words-of source words-of target [
+				unless value? in target word [error? set/any in target word get/any word]
+			]
+		]
 	]
 	also target set [source target from] none
 ]
 ; Note: This is native in R3 and supports module! too.
+; Implementation note: INTERSECT returns the values from its first argument,
+; and WORDS-OF returns a block of words that are bound to its argument, so
+;     intersect words-of source words-of target
+; returns a block of words bound to source.
 
 
 ; Series functions
@@ -777,6 +818,35 @@ first+: funco [
 	throw-on-error [also pick get word 1 set word next get word]
 ]
 ; Note: Native in R3.
+
+single?: funco [
+	"Returns TRUE if the series length is 1."
+	series  [series! port! tuple! bitset! struct!] ; map! object! gob! any-word!
+][1 = length? :series]
+; Note: Type spec same as LENGTH?, which also supports the extra types in R3
+
+remold: funco [
+	"Reduces and converts a value to a REBOL-readable string."
+	value [any-type!] "The value to reduce and mold"
+	/only "For a block value, mold only its contents, no outer []"
+	/all "Mold in serialized format"
+	/flat "No indentation"
+][ ; Nasty, but the best you can do without native APPLY
+	do pick pick pick [[[
+		[mold reduce :value]
+		[mold/flat reduce :value]
+	] [
+		[mold/all reduce :value]
+		[mold/all/flat reduce :value]
+	]] [[
+		[mold/only reduce :value]
+		[mold/only/flat reduce :value]
+	] [
+		[mold/only/all reduce :value]
+		[mold/only/all/flat reduce :value]
+	]]] not only not all not flat
+]
+; Note: Uses APPLY in R3.
 
 append: funco [
 	"Inserts a value at tail of series and returns the series at head. (Modifies)"
@@ -1003,8 +1073,8 @@ extract: func [
 ]
 ; Note: Function values are evaluated at end of block to ensure safety.
 
-; MAP with set-words, best datatype! support and /into (ideal full version)
-map: funco [
+; MAP-EACH with set-words, best datatype! support and /into (ideal full version)
+map-each: funco [
 	"Evaluates a block for each value(s) in a series and returns them as a block."
 	[throw catch]
 	'word [word! block!] "Word or block of words to set each time (local)"
@@ -1064,52 +1134,50 @@ collect: funco [
 ]
 ; R3 version based on a discussion with Gregg and Gabriele in AltME.
 
+collect-words: funco [
+	"Collect unique words used in a block (used for context construction)."
+	block [block!]
+	/deep "Include nested blocks"
+	/set "Only include set-words"
+	/ignore "Ignore prior words"
+	words [object! port! block!] "Words to ignore"
+	/local rule word blk w
+][
+	deep: either deep [[path! | set-path! | lit-path! | into rule]] [any-block!]
+	word: either set [set-word!] [any-word!]
+	blk: []
+	parse block rule: [
+		set w word (insert tail blk to-word to-string w) | deep | skip
+	]
+	also either ignore [
+		unless block? words [words: words-of words]
+		difference blk intersect blk words
+	] [
+		unique blk
+	] (clear blk set [block words] none)
+]
+; Note: In R3 this is native, called by MAKE OBJECT!
+;   The words are not supposed to be bound, thus the to-word to-string.
+
 
 ; Character/string encoding functions
 
-;use [
-;	ascii utf8+1 utf8+2 utf8+3 utf8+4 utf8+5 utf8rest
-;	utf8+1-latin1 utf8rest-latin1
-;] [
-;ascii: charset [#"^(00)" - #"^(7F)"]
-;utf8+1: charset [#"^(C0)" - #"^(DF)"]
-;utf8+2: charset [#"^(E0)" - #"^(EF)"]
-;utf8+3: charset [#"^(F0)" - #"^(F7)"]
-;utf8+4: charset [#"^(F8)" - #"^(FB)"]
-;utf8+5: charset [#"^(FC)" - #"^(FD)"]
-;utf8rest: charset [#"^(80)" - #"^(BF)"]
-;utf8+1-latin1: charset [#"^(C0)" - #"^(C3)"]
-;utf8rest-latin1: charset [#"^(80)" - #"^(83)"] ; For bad UTF-8
-
 ascii?: funct [
 	"Returns TRUE if value or string is in ASCII character range (below 128)."
-	value [any-string! char! integer!]
+	value [string! file! email! url! tag! issue! char! integer!]
 ] compose [
 	ascii: (charset [#"^(00)" - #"^(7F)"])
 	either any-string? value [parse/all/case value [any ascii]] [value < 128]
 ]
 ; Note: Native in R3.
 
-latin1?: funct [
+latin1?: funco [
 	"Returns TRUE if value or string is in Latin-1 character range (below 256)."
-	value [any-string! char! integer!]
-] compose [ ; Decodes UTF-8 if binary!
-	ascii: (charset [#"^(00)" - #"^(7F)"])
-	utf8+1-latin1: (charset [#"^(C0)" - #"^(C3)"])
-	utf8rest: (charset [#"^(80)" - #"^(BF)"])
-	utf8rest-latin1: (charset [#"^(80)" - #"^(83)"]) ; For bad UTF-8
-	switch/default type?/word value [
-		integer! [value < 256]
-		binary! [parse/all/case value [any [
-			ascii | utf8+1-latin1 utf8rest | ; Minimized Latin-1
-			#{E0} utf8rest-latin1 utf8rest | ; Bad 3-byte Latin-1
-			#{F080} utf8rest-latin1 utf8rest | ; Bad 4-byte Latin-1
-			#{F88080} utf8rest-latin1 utf8rest | ; Bad 5-byte Latin-1
-			#{FC808080} utf8rest-latin1 utf8rest ; Bad 6-byte Latin-1
-		]]]
-	] [true] ; R2 has Latin-1 chars and strings
+	value [string! file! email! url! tag! issue! char! integer!] ; Not binary!
+][ ; R2 has Latin-1 chars and strings
+	either integer? value [value < 256] [true]
 ]
-; Note: Native in R3. Bug of accepting non-minimized UTF-8 in R3 too, for now.
+; Note: Native (and more meaningful) in R3. For forwards compatibility.
 
 utf?: funco [
 	"Returns the UTF encoding from the BOM (byte order marker): + for BE; - for LE."
@@ -1126,7 +1194,84 @@ utf?: funco [
 ]
 ; Note: Native in R3.
 
-;]
+invalid-utf?: funct [
+	"Checks for proper UTF encoding and returns NONE if correct or position where the error occurred."
+	data [binary!]
+	/utf "Check encodings other than UTF-8"
+	num [integer!] "Bit size - positive for BE negative for LE"
+] compose [
+	ascii: (charset [#"^(00)" - #"^(7F)"])
+	utf8+1: (charset [#"^(C2)" - #"^(DF)"])
+	utf8+2: (charset [#"^(E0)" - #"^(EF)"])
+	utf8+3: (charset [#"^(F0)" - #"^(F4)"])
+	utf8rest: (charset [#"^(80)" - #"^(BF)"])
+	switch/default any [num 8] [
+		8 [ ; UTF-8
+			unless parse/all/case data [(pos: none) any [
+				pos: ascii | utf8+1 utf8rest |
+				utf8+2 2 utf8rest | utf8+3 3 utf8rest
+			]] [as-binary pos]
+		]
+		16 [ ; UTF-16BE
+			pos: data
+			while [not tail? pos] [
+				hi: first pos
+				case [
+					none? lo: pick pos 2 [break/return pos]
+					55296 > w: hi * 256 + lo [pos: skip pos 2]  ; #{D800}
+					57343 < w [pos: skip pos 2]  ; #{DFFF}
+					56319 < w [break/return pos]  ; #{DBFF}
+					none? hi: pick pos 3 [break/return pos]
+					none? lo: pick pos 4 [break/return pos]
+					56320 > w: hi * 256 + lo [break/return pos]  ; #{DC00}
+					57343 >= w [pos: skip pos 4]  ; #{DFFF}
+				]
+				none
+			] ; none = valid, break/return pos = invalid
+		]
+		-16 [ ; UTF-16LE
+			pos: data
+			while [not tail? pos] [
+				lo: first pos
+				case [
+					none? hi: pick pos 2 [break/return pos]
+					55296 > w: hi * 256 + lo [pos: skip pos 2]  ; #{D800}
+					57343 < w [pos: skip pos 2]  ; #{DFFF}
+					56319 < w [break/return pos]  ; #{DBFF}
+					none? lo: pick pos 3 [break/return pos]
+					none? hi: pick pos 4 [break/return pos]
+					56320 > w: hi * 256 + lo [break/return pos]  ; #{DC00}
+					57343 >= w [pos: skip pos 4]  ; #{DFFF}
+				]
+				none
+			] ; none = valid, break/return pos = invalid
+		]
+		32 [ ; UTF-32BE
+			pos: data
+			while [not tail? pos] [
+				if any [
+					4 > length? pos
+					negative? c: to-integer pos
+					1114111 < c  ; to-integer #{10FFFF}
+				] [break/return pos]
+			]
+		]
+		-32 [ ; UTF-32LE
+			pos: data
+			while [not tail? pos] [
+				if any [
+					4 > length? pos
+					negative? c: also to-integer reverse/part pos 4 reverse/part pos 4
+					1114111 < c  ; to-integer #{10FFFF}
+				] [break/return pos]
+			]
+		]
+	] [
+		throw-error 'script 'invalid-arg num
+	]
+]
+; Note: Native in R3, which doesn't support or screen the /utf option yet.
+; See http://en.wikipedia.org/wiki/Unicode for charset/value explanations.
 
 deline: funct [
 	"Converts string terminators to standard format, e.g. CRLF to LF. (Modifies)"
@@ -1548,8 +1693,8 @@ speed?: funco [
 
 ; FORMAT, PRINTF and SPLIT waiting on consensus, no point in backporting them yet.
 
-; MAP, minimal fast version
-map: funco [
+; MAP-EACH, minimal fast version
+map-each: funco [
 	"Evaluates a block for each value(s) in a series and returns them as a block."
 	[throw]
 	'word [word! block!] "Word or block of words to set each time (local)"
@@ -1653,5 +1798,26 @@ accumulate: funco [ ; Needs consensus
 ]
 ; Has a code-injection vulnerability with get-word! parameters (R3 uses APPLY).
 ; R3 version based on a discussion about FOLD in AltME.
+
+latin1?: funct [ ; R3 support for binary! removed in 2.100.60
+	"Returns TRUE if value or string is in Latin-1 character range (below 256)."
+	value [any-string! char! integer!]
+] compose [ ; Decodes UTF-8 if binary!
+	ascii: (charset [#"^(00)" - #"^(7F)"])
+	utf8+1-latin1: (charset [#"^(C0)" - #"^(C3)"])
+	utf8rest: (charset [#"^(80)" - #"^(BF)"])
+	utf8rest-latin1: (charset [#"^(80)" - #"^(83)"]) ; For bad UTF-8
+	switch/default type?/word value [
+		integer! [value < 256]
+		binary! [parse/all/case value [any [
+			ascii | utf8+1-latin1 utf8rest | ; Minimized Latin-1
+			#{E0} utf8rest-latin1 utf8rest | ; Bad 3-byte Latin-1
+			#{F080} utf8rest-latin1 utf8rest | ; Bad 4-byte Latin-1
+			#{F88080} utf8rest-latin1 utf8rest | ; Bad 5-byte Latin-1
+			#{FC808080} utf8rest-latin1 utf8rest ; Bad 6-byte Latin-1
+		]]]
+	] [true] ; R2 has Latin-1 chars and strings
+]
+; Note: Native in R3. Bug of accepting non-minimized UTF-8 in R3 too, for now.
 
 ]]
