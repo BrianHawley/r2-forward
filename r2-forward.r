@@ -2,8 +2,8 @@ REBOL [
 	Title:  "REBOL 3 Forward Compatibility Functions"
 	Name: 'r2-forward
 	Type: 'module
-	Version: 2.100.80.0
-	Date: 22-Jan-2010
+	Version: 2.100.80.1
+	Date: 26-Mar-2010
 	File: %r2-forward.r
 	Author: "Brian Hawley" ; BrianH
 	Purpose: "Make REBOL 2 more compatible with REBOL 3."
@@ -245,6 +245,8 @@ REBOL [
 ; - Rewrote RESOLVE, adding the /all option, as done in 2.100.73.
 ; - Renamed MAP to MAP-EACH, as done in 2.100.79.
 ; - Note: TAKE doesn't have a /deep option, as in 2.100.80.
+; 26-Mar-2010: 2.100.80.1 (tracking R3 2.100.80, revision 1)
+; - Fixed EXTRACT of FALSE, APPLY with word! values.
 
 ; Function creation functions
 
@@ -667,8 +669,12 @@ apply: funco [
 		switch type?/word first words [
 			word! [ ; Regular param, all values need evaluation blocked.
 				unless noref [
-					insert/only insert tail todo 'quote get/any 'value
-				] ; Could use QUOTE here, waiting on approval.
+					either word? get/any 'value [ ; Work around QUOTE bug
+						insert tail todo to-lit-word get/any 'value
+					] [
+						insert/only insert tail todo 'quote get/any 'value
+					]
+				]
 			]
 			lit-word! [ ; Lit-word param, need to special-case get-words.
 				unless noref [
@@ -1043,7 +1049,7 @@ extract: func [
 	value "The value to use (will be called each time if a function)"
 	/into "Insert into a buffer instead (returns position after insert)"
 	output [series!] "The buffer series (modified)"
-	/local len
+	/local len val
 ][
 	if zero? width [return any [output make series 0]]  ; To avoid an infinite loop
 	len: either positive? width [  ; Length to preallocate
@@ -1061,13 +1067,19 @@ extract: func [
 		if all [not default any-string? output] [value: copy ""]
 		; R2 PARSE doesn't work well for binary!, so spoof a string!.
 		if binary? series [series: as-string series]
-		forskip series width [forall pos [output: insert/only output any [pick series pos/1 value]]]
+		forskip series width [forall pos [
+			if none? set/any 'val pick series pos/1 [set/any 'val value]
+			output: insert/only output get/any 'val
+		]]
 	][
 		unless into [output: make series len]
 		if all [not default any-string? output] [value: copy ""]
 		; R2 PARSE doesn't work well for binary!, so spoof a string!.
 		if binary? series [series: as-string series]
-		forskip series width [output: insert/only output any [pick series pos value]]
+		forskip series width [
+			if none? set/any 'val pick series pos [set/any 'val value]
+			output: insert/only output get/any 'val
+		]
 	]
 	either into [output] [head output]
 ]
