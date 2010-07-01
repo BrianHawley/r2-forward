@@ -2,8 +2,8 @@ REBOL [
 	Title:  "REBOL 3 Forward Compatibility Functions"
 	Name: 'r2-forward
 	Type: 'module
-	Version: 2.100.80.1
-	Date: 26-Mar-2010
+	Version: 2.100.80.2
+	Date: 1-Jul-2010
 	File: %r2-forward.r
 	Author: "Brian Hawley" ; BrianH
 	Purpose: "Make REBOL 2 more compatible with REBOL 3."
@@ -247,6 +247,8 @@ REBOL [
 ; - Note: TAKE doesn't have a /deep option, as in 2.100.80.
 ; 26-Mar-2010: 2.100.80.1 (tracking R3 2.100.80, revision 1)
 ; - Fixed EXTRACT of FALSE, APPLY with word! values.
+; 1-Jul-2010: 2.100.80.2 (tracking R3 2.100.80, revision 2)
+; - Fixed index math of MOVE/to/skip.
 
 ; Function creation functions
 
@@ -957,7 +959,7 @@ move: funco [
 	unless length [length: 1]
 	if skip [
 		if 1 > size [throw-error 'script 'out-of-range size]
-		offset: offset * size
+		offset: either to [offset - 1 * size + 1] [offset * size]
 		length: length * size
 	]
 	part: copy/part source length
