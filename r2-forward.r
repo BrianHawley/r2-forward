@@ -3,7 +3,7 @@ REBOL [
 	Name: 'r2-forward
 	Type: 'module
 	Version: 2.100.80.2
-	Date: 2-Jul-2010
+	Date: 3-Jul-2010
 	File: %r2-forward.r
 	Author: "Brian Hawley" ; BrianH
 	Purpose: "Make REBOL 2 more compatible with REBOL 3."
@@ -248,9 +248,9 @@ REBOL [
 ; - Note: TAKE doesn't have a /deep option, as in 2.100.80.
 ; 26-Mar-2010: 2.100.80.1 (tracking R3 2.100.80, revision 1)
 ; - Fixed EXTRACT of FALSE, APPLY with word! values.
-; 2-Jul-2010: 2.100.80.2 (tracking R3 2.100.80, revision 2)
+; 3-Jul-2010: 2.100.80.2 (tracking R3 2.100.80, revision 2)
 ; - Fixed index math of MOVE/to/skip.
-; - Implemented temporarily-modifying knockoff of PAST?.
+; - Backported PAST?.
 
 ; Function creation functions
 
@@ -835,15 +835,15 @@ single?: funco [
 ][1 = length? :series]
 ; Note: Type spec same as LENGTH?, which also supports the extra types in R3
 
-past?: func [
+past?: funco [
 	"Returns TRUE if a series index is past its tail."
 	series [series!] ; gob! port!
 ][
-	also (index? :series) < (insert tail :series "1" index? :series)
-		clear back tail :series  ; Undo the modification
+	not same? :series skip :series 0
 ]
-; Note: Native in R3, and non-modifying. No ports because you can't undo the
-; insert. INDEX? doesn't stay consistent with past-tail references in R2.
+; Note: Native in R3. Not tested on ports, and problem may not exist for them.
+; INDEX? doesn't stay consistent with past-tail references in R2.
+; Spec from R3, code from Ladislav, used with permission.
 
 remold: funco [
 	"Reduces and converts a value to a REBOL-readable string."
