@@ -2,8 +2,8 @@ REBOL [
 	Title:  "REBOL 3 Forward Compatibility Functions"
 	Name: 'r2-forward
 	Type: 'module
-	Version: 2.100.80.2
-	Date: 3-Jul-2010
+	Version: 2.100.80.3
+	Date: 30-Dec-2010
 	File: %r2-forward.r
 	Author: "Brian Hawley" ; BrianH
 	Purpose: "Make REBOL 2 more compatible with REBOL 3."
@@ -52,7 +52,7 @@ REBOL [
 		; Series functions
 		ajoin
 		first+
-		single?
+		last?
 		past?
 		remold
 		append
@@ -143,6 +143,7 @@ REBOL [
 ; - Functions related to codecs (decode, encode, encoding?, ...).
 ; - Functions related to other new types I can't spoof (task!, utype!, ...).
 ; - Functions or types for guru or internal use (evoke, stack, native, ...).
+; - Functions that extend objects, or other unsupported datatype tricks.
 ; - Functions that call chat or the new docs.
 ; - Changes or fixes to datatypes already in R2 (string!, port!, error!, ...).
 ; - Changed or fixed R2 natives (there will be another file for those).
@@ -251,6 +252,10 @@ REBOL [
 ; 3-Jul-2010: 2.100.80.2 (tracking R3 2.100.80, revision 2)
 ; - Fixed index math of MOVE/to/skip.
 ; - Backported PAST?.
+; 30-Dec-2010: 2.100.80.3 (tracking R3 2.100.80, revision 2)
+; - Renamed SINGLE? to LAST?, in keeping with bug#1636
+; - Added FUNCT /extern words option from 2.100.108.
+; - Added Carl's FIND-ALL to the experimental section (needs work).
 
 ; Function creation functions
 
@@ -291,6 +296,7 @@ funct: funco [
 	body [block!] "The body block of the function"
 	/with "Define or use a persistent object (self)"
 	object [object! block!] "The object or spec"
+	/extern words [block!] "These words are not local"
 	/local r ws wb a
 ][
 	spec: copy/deep spec
@@ -306,6 +312,8 @@ funct: funco [
 		bind body object  ; Bind any object words found in the body
 		insert tail ws first object ; first used since 'self should be included
 	]
+	; Screen out the external words too
+	insert tail ws words
 	; Get any set-words in the code block as words (wb)
 	wb: make block! 12  ; This should be a reasonable default
 	parse body r: [any [
@@ -829,7 +837,7 @@ first+: funco [
 ]
 ; Note: Native in R3.
 
-single?: funco [
+last?: funco [
 	"Returns TRUE if the series length is 1."
 	series  [series! port! tuple! bitset! struct!] ; map! object! gob! any-word!
 ][1 = length? :series]
@@ -1845,5 +1853,25 @@ latin1?: funct [ ; R3 support for binary! removed in 2.100.60
 	] [true] ; R2 has Latin-1 chars and strings
 ]
 ; Note: Native in R3. Bug of accepting non-minimized UTF-8 in R3 too, for now.
+
+find-all: funco [ ; Needs work
+	"Find all occurances of the value within the series (allows modification)."
+	[throw]
+	'series [word!] "Variable for block, string, or other series"
+	value
+	body [block!] "Evaluated for each occurance"
+][
+	unless series? get series [
+		throw-error 'script 'expect-set reduce [[series!] type? get series]
+	]
+	do make function! reduce [series] compose/deep [
+		while [(to set-word! series) find (series) :value] [
+			(copy/deep body)
+			++ (series)
+		]
+	] get series
+]
+; Note: The series argument can't be 'while, 'find, 'value or '++.
+;       R3 version by Carl, including the word restrictions.
 
 ]]
