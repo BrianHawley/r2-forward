@@ -252,10 +252,11 @@ REBOL [
 ; 3-Jul-2010: 2.100.80.2 (tracking R3 2.100.80, revision 2)
 ; - Fixed index math of MOVE/to/skip.
 ; - Backported PAST?.
-; 30-Dec-2010: 2.100.80.3 (tracking R3 2.100.80, revision 2)
-; - Renamed SINGLE? to LAST?, in keeping with bug#1636
+; 30-Dec-2010: 2.100.80.3 (tracking R3 2.100.80, revision 3, and then some)
+; - Renamed SINGLE? to LAST?, in keeping with bug#1636.
 ; - Added FUNCT /extern words option from 2.100.108.
-; - Added Carl's FIND-ALL to the experimental section (needs work).
+; - Added FIND-ALL based on the bug#1811 changes.
+; - INVALID-UTF? was missing a [catch] clause in its function spec.
 
 ; Function creation functions
 
@@ -1153,6 +1154,23 @@ map-each: funco [
 ]
 ; Note: This is pretty fast by R2 mezzanine loop standards, native in R3.
 
+find-all: funct [
+	"Find all occurances of the value within the series (allows modification)."
+	[throw catch]
+	'series [word!] "Variable for block, string, or other series"
+	value
+	body [block!] "Evaluated for each occurance"
+][
+	unless series? orig: get series [
+		throw make error! "find-all expected series argument to refer to a series!"
+	]
+	while [any [set series find get series :value (set series orig false)]] [
+		do body
+		also get series set series next get series  ; ++ inlined for speed
+	]
+]
+; Original R3 version by Carl, version this is based on by Brian.
+
 collect: funco [
 	"Evaluates a block, storing values via KEEP function, and returns block of collected values."
 	body [block!] "Block to evaluate"
@@ -1230,6 +1248,7 @@ utf?: funco [
 
 invalid-utf?: funct [
 	"Checks for proper UTF encoding and returns NONE if correct or position where the error occurred."
+	[catch]
 	data [binary!]
 	/utf "Check encodings other than UTF-8"
 	num [integer!] "Bit size - positive for BE negative for LE"
@@ -1853,25 +1872,5 @@ latin1?: funct [ ; R3 support for binary! removed in 2.100.60
 	] [true] ; R2 has Latin-1 chars and strings
 ]
 ; Note: Native in R3. Bug of accepting non-minimized UTF-8 in R3 too, for now.
-
-find-all: funco [ ; Needs work
-	"Find all occurances of the value within the series (allows modification)."
-	[throw]
-	'series [word!] "Variable for block, string, or other series"
-	value
-	body [block!] "Evaluated for each occurance"
-][
-	unless series? get series [
-		throw-error 'script 'expect-set reduce [[series!] type? get series]
-	]
-	do make function! reduce [series] compose/deep [
-		while [(to set-word! series) find (series) :value] [
-			(copy/deep body)
-			++ (series)
-		]
-	] get series
-]
-; Note: The series argument can't be 'while, 'find, 'value or '++.
-;       R3 version by Carl, including the word restrictions.
 
 ]]
