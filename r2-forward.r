@@ -2,8 +2,8 @@ REBOL [
 	Title:  "REBOL 3 Forward Compatibility Functions"
 	Name: 'r2-forward
 	Type: 'module
-	Version: 2.100.80.3
-	Date: 30-Dec-2010
+	Version: 2.100.80.4
+	Date: 23-Feb-2011
 	File: %r2-forward.r
 	Author: "Brian Hawley" ; BrianH
 	Purpose: "Make REBOL 2 more compatible with REBOL 3."
@@ -64,6 +64,7 @@ REBOL [
 		replace
 		alter
 		map-each
+		find-all
 		collect
 		collect-words
 		; Character/string encoding functions
@@ -257,6 +258,9 @@ REBOL [
 ; - Added FUNCT /extern words option from 2.100.108.
 ; - Added FIND-ALL based on the bug#1811 changes.
 ; - INVALID-UTF? was missing a [catch] clause in its function spec.
+; 23-Feb-2011: 2.100.80.4 (tracking R3 2.100.80, revision 3, and then some)
+; - Fixed bug in MAP-EACH related to the [throw] function spec clause.
+; - Exported FIND-ALL, now that bug#1811 is accepted in R3.
 
 ; Function creation functions
 
@@ -1120,37 +1124,38 @@ map-each: funco [
 	/local init len x
 ][
 	; Shortcut return for empty data
-	if empty? data [return any [output make block! 0]]
-	; BIND/copy word and body
-	word: either block? word [
-		if empty? word [throw make error! [script invalid-arg []]]
-		copy/deep word  ; /deep because word is rebound before errors checked
-	] [reduce [word]]
-	word: use word reduce [word]
-	body: bind/copy body first word
-	; Build init code
-	init: none
-	parse word [any [word! | x: set-word! (
-		unless init [init: make block! 4]
-		; Add [x: at data index] to init, and remove from word
-		insert insert insert tail init first x [at data] index? x
-		remove x
-	) :x | x: skip (
-		throw make error! reduce ['script 'expect-set [word! set-word!] type? first x]
-	)]]
-	len: length? word ; Can be zero now (for advanced code tricks)
-	; Create the output series if not specified
-	unless into [output: make block! divide length? data max 1 len]
-	; Process the data (which is not empty at this point)
-	until [ ; Note: output: insert/only output needed for list! output
-		set word data  do init
-		unless unset? set/any 'x do body [output: insert/only output :x]
-		tail? data: skip data len
+	either empty? data [any [output make block! 0]] [
+		; BIND/copy word and body
+		word: either block? word [
+			if empty? word [throw make error! [script invalid-arg []]]
+			copy/deep word  ; /deep because word is rebound before errors checked
+		] [reduce [word]]
+		word: use word reduce [word]
+		body: bind/copy body first word
+		; Build init code
+		init: none
+		parse word [any [word! | x: set-word! (
+			unless init [init: make block! 4]
+			; Add [x: at data index] to init, and remove from word
+			insert insert insert tail init first x [at data] index? x
+			remove x
+		) :x | x: skip (
+			throw make error! reduce ['script 'expect-set [word! set-word!] type? first x]
+		)]]
+		len: length? word ; Can be zero now (for advanced code tricks)
+		; Create the output series if not specified
+		unless into [output: make block! divide length? data max 1 len]
+		; Process the data (which is not empty at this point)
+		until [ ; Note: output: insert/only output needed for list! output
+			set word data  do init
+			unless unset? set/any 'x do body [output: insert/only output :x]
+			tail? data: skip data len
+		]
+		; Return the output and clean up memory references
+		also either into [output] [head output] (
+			set [word data body output init x] none
+		)
 	]
-	; Return the output and clean up memory references
-	also either into [output] [head output] (
-		set [word data body output init x] none
-	)
 ]
 ; Note: This is pretty fast by R2 mezzanine loop standards, native in R3.
 
